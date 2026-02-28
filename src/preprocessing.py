@@ -30,11 +30,11 @@ def preprocess(df: pd.DataFrame) -> pd.DataFrame:
 
     # ── Impute missing values ────────────────────────────────────────────────
     if "Age" in df.columns:
-        df["Age"].fillna(df["Age"].median(), inplace=True)
+        df["Age"] = df["Age"].fillna(df["Age"].median())
     if "Fare" in df.columns:
-        df["Fare"].fillna(df["Fare"].median(), inplace=True)
+        df["Fare"] = df["Fare"].fillna(df["Fare"].median())
     if "Embarked" in df.columns:
-        df["Embarked"].fillna(df["Embarked"].mode()[0], inplace=True)
+        df["Embarked"] = df["Embarked"].fillna(df["Embarked"].mode()[0])
 
     # ── Encode categoricals ──────────────────────────────────────────────────
     if "Sex" in df.columns:
