@@ -3,6 +3,9 @@ app/app.py – Streamlit app for interactive Titanic survival prediction.
 
 Run:
     streamlit run app/app.py
+
+On Streamlit Cloud (or any fresh environment), if model files are not found
+the app automatically runs the training pipeline first.
 """
 
 import sys
@@ -77,7 +80,6 @@ st.markdown(
         font-weight: 600;
         box-shadow: 0 8px 32px rgba(201, 75, 75, 0.3);
     }
-    .stSlider > div > div { background: rgba(255,255,255,0.05); }
     </style>
     """,
     unsafe_allow_html=True,
@@ -94,15 +96,62 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ── Load artefacts ────────────────────────────────────────────────────────────
+# ── Auto-train if model files are missing ─────────────────────────────────────
 MODEL_PATH  = ROOT / "models" / "best_model.pkl"
 SCALER_PATH = ROOT / "models" / "scaler.pkl"
 
 
-@st.cache_resource
+def run_training_pipeline():
+    """Run the full ML pipeline to train and save the model."""
+    from sklearn.model_selection import train_test_split
+    from sklearn.preprocessing import StandardScaler
+
+    from src.data_loader         import load_raw_data
+    from src.feature_engineering import engineer_features
+    from src.preprocessing       import preprocess
+    from src.model_training      import train_models, select_best_model, save_artifacts
+    from src.evaluation          import evaluate_model, plot_feature_importance
+
+    FEATURE_COLS = [
+        "Pclass", "Sex", "Age", "SibSp", "Parch", "Fare", "Embarked",
+        "Title", "FamilySize", "IsAlone", "FarePerPerson",
+    ]
+    TARGET = "Survived"
+
+    train_df, test_df = load_raw_data()
+    train_df = preprocess(engineer_features(train_df))
+    test_df  = preprocess(engineer_features(test_df))
+
+    available = [c for c in FEATURE_COLS if c in train_df.columns]
+
+    if TARGET in test_df.columns:
+        X_train, y_train = train_df[available], train_df[TARGET]
+        X_test,  y_test  = test_df[available],  test_df[TARGET]
+    else:
+        X, y = train_df[available], train_df[TARGET]
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=0.2, random_state=42, stratify=y
+        )
+
+    scaler  = StandardScaler()
+    X_train = pd.DataFrame(scaler.fit_transform(X_train), columns=available)
+    X_test  = pd.DataFrame(scaler.transform(X_test),      columns=available)
+
+    results            = train_models(X_train, y_train)
+    best_name, best_model = select_best_model(results)
+    save_artifacts(best_model, scaler)
+    evaluate_model(best_model, X_test, y_test, model_name=best_name)
+    plot_feature_importance(best_model, available)
+    return best_name
+
+
+@st.cache_resource(show_spinner=False)
 def load_artifacts():
+    """Load or train model artifacts."""
     if not MODEL_PATH.exists() or not SCALER_PATH.exists():
-        return None, None
+        with st.spinner("🔧 First launch — training the model (takes ~30 seconds)..."):
+            name = run_training_pipeline()
+        st.success(f"✅ Model trained! Best model: **{name}**")
     model  = joblib.load(MODEL_PATH)
     scaler = joblib.load(SCALER_PATH)
     return model, scaler
@@ -110,27 +159,20 @@ def load_artifacts():
 
 model, scaler = load_artifacts()
 
-if model is None:
-    st.error(
-        "⚠️ Model not found. Please run `python main.py` first to train and save the model.",
-        icon="🔴",
-    )
-    st.stop()
-
 # ── Sidebar inputs ────────────────────────────────────────────────────────────
 with st.sidebar:
     st.header("🧑 Passenger Details")
     st.markdown("---")
 
-    pclass   = st.selectbox("Passenger Class", [1, 2, 3], index=2,
-                             help="1 = First, 2 = Second, 3 = Third")
-    sex      = st.radio("Sex", ["Male", "Female"])
-    age      = st.slider("Age", 0, 80, 28)
-    sibsp    = st.slider("Siblings / Spouses Aboard (SibSp)", 0, 8, 0)
-    parch    = st.slider("Parents / Children Aboard (Parch)", 0, 6, 0)
-    fare     = st.slider("Fare Paid (£)", 0.0, 520.0, 32.0, step=0.5)
-    embarked = st.selectbox("Port of Embarkation",
-                             ["Southampton (S)", "Cherbourg (C)", "Queenstown (Q)"])
+    pclass    = st.selectbox("Passenger Class", [1, 2, 3], index=2,
+                              help="1 = First, 2 = Second, 3 = Third")
+    sex       = st.radio("Sex", ["Male", "Female"])
+    age       = st.slider("Age", 0, 80, 28)
+    sibsp     = st.slider("Siblings / Spouses Aboard (SibSp)", 0, 8, 0)
+    parch     = st.slider("Parents / Children Aboard (Parch)", 0, 6, 0)
+    fare      = st.slider("Fare Paid (£)", 0.0, 520.0, 32.0, step=0.5)
+    embarked  = st.selectbox("Port of Embarkation",
+                              ["Southampton (S)", "Cherbourg (C)", "Queenstown (Q)"])
     title_opt = st.selectbox("Title", ["Mr", "Miss", "Mrs", "Master", "Rare"])
 
     st.markdown("---")
@@ -165,7 +207,6 @@ with col1:
         </div>""",
         unsafe_allow_html=True,
     )
-
 with col2:
     st.markdown(
         f"""<div class="metric-card">
@@ -174,7 +215,6 @@ with col2:
         </div>""",
         unsafe_allow_html=True,
     )
-
 with col3:
     st.markdown(
         f"""<div class="metric-card">
@@ -188,7 +228,6 @@ st.markdown("<br>", unsafe_allow_html=True)
 
 # ── Prediction ────────────────────────────────────────────────────────────────
 if predict_btn:
-    # determine which columns the scaler expects
     try:
         n_features = scaler.n_features_in_
         available  = input_data.columns.tolist()[:n_features]
@@ -222,15 +261,13 @@ if predict_btn:
                 )
 
         with col_b:
-            st.metric("Survival Probability", f"{survival_pct:.1f}%")
+            st.metric("Survival Probability",     f"{survival_pct:.1f}%")
             st.metric("Not-Survival Probability", f"{proba[0]*100:.1f}%")
 
         st.markdown("<br>", unsafe_allow_html=True)
-
-        # Probability bar
         st.write("**Survival Probability Breakdown**")
         prob_df = pd.DataFrame({
-            "Outcome": ["Survived", "Did Not Survive"],
+            "Outcome":     ["Survived", "Did Not Survive"],
             "Probability": [proba[1], proba[0]],
         }).set_index("Outcome")
         st.bar_chart(prob_df)
@@ -239,12 +276,14 @@ if predict_btn:
         st.error(f"Prediction failed: {e}")
 
 else:
-    st.info("👈 Fill in the passenger details on the left and click **Predict Survival**.")
+    st.info("👈 Fill in passenger details on the left and click **Predict Survival**.")
 
 # ── Footer ────────────────────────────────────────────────────────────────────
 st.markdown("---")
 st.markdown(
     "<center><small>Built with ❤️ using Scikit-Learn & Streamlit · "
-    "Titanic Dataset from OpenML</small></center>",
+    "Titanic Dataset · "
+    "<a href='https://github.com/superstarakshaykumar99-sudo/titanic-survival-ml' target='_blank'>GitHub</a>"
+    "</small></center>",
     unsafe_allow_html=True,
 )
