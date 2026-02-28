@@ -37,7 +37,7 @@ def _build_candidates() -> dict:
         from xgboost import XGBClassifier  # type: ignore[import]
         candidates["XGBoost"] = XGBClassifier(
             n_estimators=200, max_depth=4, learning_rate=0.1,
-            use_label_encoder=False, eval_metric="logloss",
+            eval_metric="logloss",
             random_state=RANDOM_STATE, verbosity=0,
         )
     except ImportError:
